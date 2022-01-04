@@ -1,0 +1,266 @@
+version: '3.8'
+
+
+services:
+  htp-portal-ui:
+    container_name: htp-portal-ui
+    build:
+      context: ../htp-portal-ui
+      dockerfile: Dockerfile-local-docker-compose
+    ports:
+      - "${HTP_PORTAL_UI_PORT:-4200}:80"
+    environment:
+      - BACKEND_URL=${HTP_PORTAL_BACKEND_HOST}${HTP_PORTAL_BACKEND_PORT_COLUMN}
+      - OWN_URL=${HTP_PORTAL_UI_HOST}${HTP_PORTAL_UI_PORT_COLUMN}
+
+  htp-portal-backend:
+    container_name: htp-portal-backend
+    build:
+      context: ../htp-portal-backend
+    ports:
+      - "${HTP_PORTAL_BACKEND_PORT:-8080}:8080"
+    environment:
+      - VENDOR_URLS=http://htp-hotel-vendor-2-backend:8080//hotelSearch,http://htp-hotel-vendor-1-backend:80//hotelSearch
+      - COSMOS_URI=${COSMOS_URI}
+      - COSMOS_KEY=${COSMOS_KEY}
+      - COSMOS_DB=${COSMOS_DB}
+      - BROKERS=broker:29092
+      - PORTAL_ID=${PORTAL_ID}
+    networks:
+      - spring-postgres
+    depends_on:
+      - broker
+
+
+  htp-hotel-vendor-ui-1:
+    container_name: htp-hotel-vendor-ui-1
+    image: htp-hotel-vendor-ui
+    build:
+      context: ../htp-hotel-vendor-ui
+    ports:
+      - "${HTP_HOTEL_VENDOR_UI_1_PORT:-3101}:3000"
+    environment:
+      REACT_APP_BACKEND_HOST: http://localhost:${HTP_HOTEL_VENDOR_2_BACKEND_PORT:-8083}
+      REACT_APP_BACKEND_BOOKING_RESOURCE: roomBooking
+      REACT_APP_VENDOR_TYPE: .net
+
+  htp-hotel-vendor-1-backend:
+    container_name: htp-hotel-vendor-1-backend
+    build:
+      context: ../htp-hotel-vendor-1-backend
+    ports:
+      - ${HTP_HOTEL_VENDOR_1_BACKEND_PORT:-8082}:80
+    environment:
+      - POSTGRES_DB=holiday
+      - FRONT_END_URL=http://localhost:${HTP_HOTEL_VENDOR_UI_1_PORT:-3101}
+      - Server__DbConnection=Server=vendor1-db;Database=holiday;Port=5432;User Id=postgres;Password=postgres
+      - BackendConfiguration__DeepLinkURL=http://localhost:${HTP_HOTEL_VENDOR_UI_1_PORT:-3101}/rooms/book/?roomName={Name}&roomPrice={Price}&currency={Currency}&roomType={Type}&bookFrom={DateFrom:yyyy-MM-dd}&bookTo={DateTo:yyyy-MM-dd}&id={Id}
+      - BackendConfiguration_DeepLinkURL=http://localhost:${HTP_HOTEL_VENDOR_UI_1_PORT:-3101}/rooms/book/?roomName={Name}&roomPrice={Price}&currency={Currency}&roomType={Type}&bookFrom={DateFrom:yyyy-MM-dd}&bookTo={DateTo:yyyy-MM-dd}&id={Id}
+      - DeepLinkURL=http://localhost:${HTP_HOTEL_VENDOR_UI_1_PORT:-3101}/rooms/book/?roomName={Name}&roomPrice={Price}&currency={Currency}&roomType={Type}&bookFrom={DateFrom:yyyy-MM-dd}&bookTo={DateTo:yyyy-MM-dd}&id={Id}
+    networks:
+      - spring-postgres
+    depends_on:
+      vendor1-db:
+        condition: service_healthy      
+        
+  htp-hotel-vendor-ui-2:
+    container_name: htp-hotel-vendor-ui-2
+    image: htp-hotel-vendor-ui
+    build:
+      context: ../htp-hotel-vendor-ui
+    ports:
+      - "${HTP_HOTEL_VENDOR_UI_2_PORT:-3102}:3000"
+    environment:
+      REACT_APP_BACKEND_HOST: http://localhost:${HTP_HOTEL_VENDOR_2_BACKEND_PORT:-8083}
+      REACT_APP_BACKEND_BOOKING_RESOURCE: roomBooking
+      REACT_APP_VENDOR_TYPE: java
+
+  htp-hotel-vendor-2-backend:
+    container_name: htp-hotel-vendor-2-backend
+    build:
+      context: ../htp-hotel-vendor-2-backend
+    ports:
+      - ${HTP_HOTEL_VENDOR_2_BACKEND_PORT:-8083}:8080
+    environment:  
+      - FRONT_END_URL=http://localhost:${HTP_HOTEL_VENDOR_UI_2_PORT:-3102}
+      - DB_URL=jdbc:postgresql://vendor2-db:${POSTGRES_DEFAULT_PORT:-5432}/holiday
+      - DB_USERNAME=postgres
+      - DB_PASSWORD=postgres
+      - BROKERS=broker:29092
+      - PORTAL_ID=${PORTAL_ID}
+      - CURRENT_VENDOR_ID=htp-hotel-vendor-2
+    networks:
+      - spring-postgres 
+    depends_on:
+      vendor2-db:
+        condition: service_healthy
+
+
+  vendor1-db:
+    container_name: vendor1-db
+    image: postgres:13
+    hostname: vendor1-db
+    restart: always
+    ports:
+      - ${HTP_HOTEL_VENDOR_1_BACKEND_DB_PORT:-5432}:${POSTGRES_DEFAULT_PORT:-5432}
+    secrets:
+      - vendor1-db-password
+    volumes:
+      - vendor1-db-data:/var/lib/postgresql/data
+    networks:
+      - spring-postgres
+    environment:
+      - POSTGRES_DB=holiday
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD_FILE=/run/secrets/vendor1-db-password
+    # TODO:  init script fürs anlegen neuer DBs und jeweils mit eigenen Credentials. mit windows ist etwa tricky
+    # see the following links for any information : https://github.com/mrts/docker-postgresql-multiple-databases
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      - broker
+  
+    
+      
+  vendor2-db:
+    container_name: vendor2-db
+    image: postgres:13
+    hostname: vendor2-db
+    restart: always
+    ports:
+      - ${HTP_HOTEL_VENDOR_2_BACKEND_DB_PORT:-5433}:${POSTGRES_DEFAULT_PORT:-5432}
+    secrets:
+      - vendor2-db-password
+    volumes:
+      - vendor2-db-data:/var/lib/postgresql/data
+    networks:
+      - spring-postgres
+    environment:
+      - POSTGRES_DB=holiday
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD_FILE=/run/secrets/vendor2-db-password
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      - broker
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:6.2.1
+    hostname: zookeeper
+    container_name: zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - spring-postgres
+
+  broker:
+    image: confluentinc/cp-server:6.2.1
+    hostname: broker
+    container_name: broker
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+      - "9101:9101"
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      #KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker:29092,PLAINTEXT_HOST://broker:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_METRIC_REPORTERS: io.confluent.metrics.reporter.ConfluentMetricsReporter
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_CONFLUENT_LICENSE_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_CONFLUENT_BALANCER_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_JMX_PORT: 9101
+      #KAFKA_JMX_HOSTNAME: localhost
+      CONFLUENT_METRICS_REPORTER_BOOTSTRAP_SERVERS: broker:29092
+      CONFLUENT_METRICS_REPORTER_TOPIC_REPLICAS: 1
+      CONFLUENT_METRICS_ENABLE: 'true'
+      CONFLUENT_SUPPORT_CUSTOMER_ID: 'anonymous'
+      KAFKA_ADVERTISED_HOST_NAME: broker
+    networks:
+      - spring-postgres
+
+  control-center:
+    image: confluentinc/cp-enterprise-control-center:6.2.1
+    hostname: control-center
+    container_name: control-center
+    depends_on:
+      - broker
+    ports:
+      - "9021:9021"
+    environment:
+      CONTROL_CENTER_BOOTSTRAP_SERVERS: 'broker:29092'
+      CONTROL_CENTER_REPLICATION_FACTOR: 1
+      CONTROL_CENTER_INTERNAL_TOPICS_PARTITIONS: 1
+      CONTROL_CENTER_MONITORING_INTERCEPTOR_TOPIC_PARTITIONS: 1
+      CONFLUENT_METRICS_TOPIC_REPLICATION: 1
+      PORT: 9021
+    networks:
+      - spring-postgres
+
+      
+  # pgadmin:
+    # image: dpage/pgadmin4
+    # depends_on:
+      # - db
+    # ports:
+      # - 5555:80
+    # environment:
+      # PGADMIN_DEFAULT_EMAIL: vogesi@akros.ch
+      # PGADMIN_DEFAULT_PASSWORD: admin
+    # restart: always
+
+volumes:
+  vendor1-db-data:
+  vendor2-db-data:
+secrets:
+  vendor1-db-password:
+    file: ../htp-hotel-vendor-1-backend/db/password.txt
+  vendor2-db-password:
+    file: ../htp-hotel-vendor-2-backend/db/password.txt
+networks:
+  spring-postgres:
+  
+  
+# what has been done?
+# -- docker compose file has been created and every part of the HTP solution is now startable from the docker compose
+# -- a docker file Dockerfile-local-docker-compose has been added. this file is used for starting the portal ui in a docker-compose mode: 
+# -- .env file has been added. This file contains every environment variable that need to be set up. From now on, the application can start a every portal-backend
+# 3- Portal UI has been edited with following:
+    # --------- The environment value in the environments file are now dynamically filed. this is the case for the following value: ownUal and backendUrl
+    #  see the following link for it: https://pumpingco.de/blog/environment-variables-angular-docker/    and https://stackoverflow.com/questions/36528824/pass-environment-variables-to-an-angular2-app
+    
+# -- to start the ui in mock : cls && ng serve -c mock
+# -- to start the ui in docker local mode : cls && ng serve -c docker
+# -- to see how our dynamic variable works, just follow the steps bellow
+   # ------------ docker build -t local-docker-compose-image -f Dockerfile-local-docker-compose . 
+   # ------------ docker run --name local-docker-compose-container -dp 4225:80  --env BACKEND_URL="http://localhost:8081"  --env OWN_URL="http://localhost:8089"  local-docker-compose-image
+   # ------------ the container local-docker-compose-container will start with following env variable initalise: BACKEND_URL="http://localhost:8081"  OWN_URL="http://localhost:8089"
+   # ------------ the can then start the UI at the URL http://localhost:4225
+   
+ 
+# CAUTION: our 
+
+
+   # set "REACT_APP_NOT_SECRET_CODE=abcdef" && set REACT_APP_BACKEND_HOST=http://localhost:8083 && set REACT_APP_VENDOR_TYPE=java && npm start
+
+
+   #       REACT_APP_BACKEND_HOST: http://localhost:${HTP_HOTEL_VENDOR_2_BACKEND_PORT:-8083}
+   #       REACT_APP_BACKEND_BOOKING_RESOURCE: roomBooking
+    #      REACT_APP_VENDOR_TYPE: java
+   # http://localhost:3000/rooms/book/?roomName=Aareblick&roomPrice=500&currency=CHF&roomType=STUDIO&bookFrom=2021-11-16&bookTo=2021-11-23&id=101&_ref=RWxTaGVyb2tlZQ==
